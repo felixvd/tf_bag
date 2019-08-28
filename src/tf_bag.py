@@ -24,6 +24,8 @@ class BagTfTransformer(object):
             bag = rosbag.Bag(bag)
         self.tf_messages = sorted((tm for m in bag if m.topic.strip("/") == 'tf' for tm in m.message.transforms),
                                   key=lambda tfm: tfm.header.stamp.to_nsec())
+        self.tf_static_messages = sorted((tm for m in bag if m.topic.strip("/") == 'tf_static' for tm in m.message.transforms),
+                                  key=lambda tfm: tfm.header.stamp.to_nsec())
         self.tf_times = np.array(list((tfm.header.stamp.to_nsec() for tfm in self.tf_messages)))
         self.transformer = tf.TransformerROS()
         self.last_population_range = (rospy.Time(0), rospy.Time(0))
@@ -73,6 +75,8 @@ class BagTfTransformer(object):
 
         tf_messages_in_interval = self.getMessagesInTimeRange(population_start_time, target_end_time)
         for m in tf_messages_in_interval:
+            self.transformer.setTransform(m)
+        for m in self.tf_static_messages:
             self.transformer.setTransform(m)
 
         self.last_population_range = (target_start_time, target_end_time)
@@ -143,6 +147,8 @@ class BagTfTransformer(object):
         if self.all_transform_tuples is None:
             ret = set()
             for m in self.tf_messages:
+                ret.add((m.header.frame_id, m.child_frame_id))
+            for m in self.tf_static_messages:
                 ret.add((m.header.frame_id, m.child_frame_id))
             self.all_transform_tuples = ret
 
@@ -244,12 +250,13 @@ class BagTfTransformer(object):
         :param start_time: the first time at which the messages should be considered; if None, all recorded messages
         :return: the ROS time at which the transform is available
         """
+        messages = self.tf_static_messages # The static messages are always received first
         if orig_frame == dest_frame:
             return self.tf_messages[0].header.stamp
         if start_time is not None:
-            messages = itertools.ifilter(lambda m: m.header.stamp > start_time, self.tf_messages)
+            messages += itertools.ifilter(lambda m: m.header.stamp > start_time, self.tf_messages)
         else:
-            messages = self.tf_messages
+            messages += self.tf_messages
         missing_transforms = self.getChainTuples(orig_frame, dest_frame)
         message = messages.__iter__()
         ret = rospy.Time(0)
